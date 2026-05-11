@@ -1,6 +1,9 @@
 package com.kevin.poker;
 
+import com.kevin.poker.network.PokerNetworkBridge;
+
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -16,7 +19,10 @@ public class PokerGame {
     private int bigBlind;
     private Scanner scanner;
     private PokerGUI ui; // optional GUI callback
+    private PokerNetworkBridge networkBridge;
+    private final Map<Integer, BlockingQueue<Action>> networkActionQueues = new ConcurrentHashMap<>();
     private final BlockingQueue<Action> guiActionQueue = new LinkedBlockingQueue<>();
+    private boolean networkMode = false;
     
     public PokerGame(int smallBlind, int bigBlind) {
         this.smallBlind = smallBlind;
@@ -36,9 +42,29 @@ public class PokerGame {
         this.ui = ui;
     }
 
+    public void setNetworkBridge(PokerNetworkBridge networkBridge) {
+        this.networkBridge = networkBridge;
+        this.networkMode = (networkBridge != null);
+    }
+
+    public void registerNetworkActionQueue(int playerId, BlockingQueue<Action> actionQueue) {
+        if (actionQueue == null) {
+            networkActionQueues.remove(playerId);
+        } else {
+            networkActionQueues.put(playerId, actionQueue);
+        }
+    }
+
+    public void unregisterNetworkActionQueue(int playerId) {
+        networkActionQueues.remove(playerId);
+    }
+
     public void logAction(String message) {
         if (ui != null) {
             ui.appendActionLog(message);
+        }
+        if (networkBridge != null) {
+            networkBridge.onLog(message);
         }
     }
 
@@ -46,11 +72,17 @@ public class PokerGame {
         if (ui != null) {
             ui.appendActionLog(message, type);
         }
+        if (networkBridge != null) {
+            networkBridge.onLog(message);
+        }
     }
 
     public void updatePotDisplay(int potValue) {
         if (ui != null) {
             ui.updatePot(potValue);
+        }
+        if (networkBridge != null) {
+            networkBridge.onPotUpdated(potValue);
         }
     }
 
@@ -69,6 +101,9 @@ public class PokerGame {
     public void displayStreet(String street) {
         if (ui != null) {
             ui.displayStreet(street);
+        }
+        if (networkBridge != null) {
+            networkBridge.onStreetChanged(street);
         }
     }
     
@@ -92,11 +127,15 @@ public class PokerGame {
             // Rotate dealer
             dealerIndex = (dealerIndex + 1) % players.size();
             
-            // Wait for user to continue
-            System.out.print("\nPress Enter to continue to next hand...");
-            scanner.nextLine();
+            // Wait for user to continue (skip in network mode)
+            if (!networkMode) {
+                System.out.print("\nPress Enter to continue to next hand...");
+                scanner.nextLine();
+            }
         }
-        scanner.close();
+        if (!networkMode) {
+            scanner.close();
+        }
     }
     
     private void playHand() {
@@ -225,6 +264,9 @@ public class PokerGame {
         if (ui != null) {
             ui.updateCommunityCards();
         }
+        if (networkBridge != null) {
+            networkBridge.onCommunityCardsUpdated(getCommunityCards());
+        }
     }
     
     private void showdown() {
@@ -310,6 +352,23 @@ public class PokerGame {
                 System.out.println("Interrupted while waiting for GUI action. Defaulting to call/check.");
             }
         }
+
+        BlockingQueue<Action> networkQueue = networkActionQueues.get(player.getId());
+        if (networkQueue != null) {
+            if (networkBridge != null) {
+                networkBridge.promptPlayer(player, currentBet, pot, getCommunityCards());
+            }
+            try {
+                Action networkAction = networkQueue.poll(5, TimeUnit.MINUTES);
+                if (networkAction != null) {
+                    return networkAction;
+                }
+                System.out.println("Network action timeout. Defaulting to call/check.");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.out.println("Interrupted while waiting for network action. Defaulting to call/check.");
+            }
+        }
         
         System.out.println("\n" + "▶".repeat(20));
         System.out.println(player.getName() + "'s TURN");
@@ -369,7 +428,11 @@ public class PokerGame {
     public List<Card> getCommunityCards() {
         return new ArrayList<>(communityCards);
     }
-    
+
+    public List<Player> getPlayers() {
+        return new ArrayList<>(players);
+    }
+
     public void receivePlayerAction(int playerId, Action action) {
         // This would integrate with the GUI to handle player actions
         if (playerId < 0 || playerId >= players.size()) {
