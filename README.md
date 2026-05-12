@@ -28,6 +28,13 @@ Requirements
 Can go to this Folder to instructions: 
 https://drive.google.com/drive/folders/1anyYbM3A-NF_JnVW6MluZUOlbH-gD3VI?usp=sharing
 There's a video
+Your instructor required at least 3 advanced concepts. You've implemented:
+
+    Multi-threading ✓ - Server handles multiple clients concurrently
+
+    Networking ✓ - Socket-based client-server communication
+
+    Rich GUI ✓ - JavaFX with animations very few, only fade in
 
 Quick Start
 1. Clone/Download the Project
