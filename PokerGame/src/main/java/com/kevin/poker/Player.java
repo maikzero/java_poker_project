@@ -62,6 +62,10 @@ public class Player {
         currentBet += amount;
     }
     
+    public void setChips(int chips) {
+        this.chips = chips;
+    }
+
     public void call(int callAmount) {
         int toCall = callAmount - currentBet;
         if (toCall > chips) {

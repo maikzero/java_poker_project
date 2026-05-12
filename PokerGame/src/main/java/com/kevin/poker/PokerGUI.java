@@ -17,9 +17,11 @@ import javafx.scene.text.Text;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
+import com.kevin.poker.network.PokerClientEventHandler;
+
 import java.util.*;
 
-public class PokerGUI extends Application {
+public class PokerGUI extends Application implements PokerClientEventHandler.Listener {
 
     public enum LogType {
         INFO,
@@ -50,40 +52,51 @@ public class PokerGUI extends Application {
     }
     
     // Game state
-    private PokerGame game;
-    private int playerId;  // 0 = human, 1,2,3 = AI opponents
-    private List<Player> players;
+    protected PokerGame game;
+    protected int playerId;  // 0 = human, 1,2,3 = AI opponents
+    protected List<Player> players;
     
     // UI Components
-    private VBox root;
-    private HBox tableArea;
-    private VBox playerArea;
-    private HBox communityArea;
-    private HBox buttonArea;
+    protected VBox root;
+    protected HBox tableArea;
+    protected VBox playerArea;
+    protected HBox communityArea;
+    protected HBox buttonArea;
     
     // Player-specific elements
-    private HBox playerHand;
-    private Text potText;
-    private Text playerChipsText;
-    private Text gameStatusText;
-    private Text currentTurnText;
+    protected HBox playerHand;
+    protected Text potText;
+    protected Text playerChipsText;
+    protected Text gameStatusText;
+    protected Text currentTurnText;
     private ListView<LogEntry> actionLogView;
     private int displayedPot;
+    private List<Card> communityCards;
     
     // Street banner and opponent boxes
-    private Text streetBannerText;
-    private List<VBox> opponentBoxes;
-    private int currentPlayerIndex;
+    protected Text streetBannerText;
+    protected List<VBox> opponentBoxes;
     private final String basePlayerAreaStyle = "-fx-background-color: #2d6a4f; -fx-border-color: #d4a373; -fx-border-width: 2; -fx-border-radius: 20; -fx-background-radius: 20;";
     private final String glowingPlayerAreaStyle = "-fx-background-color: #2d6a4f; -fx-border-color: #f4a261; -fx-border-width: 4; -fx-border-radius: 20; -fx-background-radius: 20; -fx-effect: dropshadow(gaussian, #f4a261, 25, 0.75, 0, 0);";
     
     // Betting controls
-    private Button checkCallButton;
-    private Button foldButton;
-    private Button raiseButton;
-    private Slider raiseSlider;
+    protected Button checkCallButton;
+    protected Button foldButton;
+    protected Button raiseButton;
+    protected Slider raiseSlider;
     private Label raiseAmountLabel;
     private Label currentBetLabel;
+
+    // Network mode flag    private boolean isNetworkMode = false;
+    private boolean isNetworkMode = false;
+    private com.kevin.poker.network.PokerClient pokerClient;
+    private String pendingHostName = null;
+    private List<Card> pendingCommunityCards;
+    private int pendingPlayerChips = -1;
+
+    public void setPokerClient(com.kevin.poker.network.PokerClient client) {
+        this.pokerClient = client;
+    }
     
     @Override
     public void start(Stage primaryStage) {
@@ -104,8 +117,95 @@ public class PokerGUI extends Application {
         // Start the first hand
         startNewHand();
     }
+
+    public void setPlayerId(int playerId) {
+        this.playerId = playerId;
+        System.out.println("PokerGUI: Player ID set to " + playerId);
+    }
+
+    // Also add this method to store player ID before GUI is ready
+    public void setPendingPlayerId(int playerId) {
+        this.playerId = playerId;
+        System.out.println("PokerGUI: Pending player ID set to " + playerId);
+    }
+
+    public void updateHoleCards(List<Card> cards) {
+        System.out.println("Updating hole cards: " + cards);
+        if (playerHand == null) {
+            System.out.println("playerHand is null, storing cards for later");
+            return;
+        }
+        if (cards == null || cards.isEmpty()) {
+            return;
+        }
+        Platform.runLater(() -> {
+            playerHand.getChildren().clear();
+            for (Card card : cards) {
+                playerHand.getChildren().add(createCardNode(card));
+            }
+            System.out.println("Hole cards displayed: " + playerHand.getChildren().size() + " cards");
+        });
+    }
     
-    private void initializeGame() {
+    public void updateCommunityCards() {
+        System.out.println("updateCommunityCards() called - no args");
+        if (!isNetworkMode && game != null) {
+            updateCommunityCards(new ArrayList<>(game.getCommunityCards()));
+            return;
+        }
+        updateCommunityCards(communityCards);
+    }
+
+    public void updateCommunityCards(List<Card> cards) {
+        System.out.println("updateCommunityCards called with " + (cards != null ? cards.size() : 0) + " cards");
+        this.communityCards = (cards == null) ? new ArrayList<>() : new ArrayList<>(cards);
+
+        // Store for later if UI not ready
+        if (communityArea == null) {
+            System.out.println("communityArea is null, storing for later");
+            pendingCommunityCards = new ArrayList<>(this.communityCards);
+            return;
+        }
+
+        // Update UI
+        Platform.runLater(() -> {
+            communityArea.getChildren().clear();
+            for (Card card : this.communityCards) {
+                System.out.println("Adding card to community area: " + card);
+                communityArea.getChildren().add(createCardNode(card));
+            }
+            System.out.println("Community cards now: " + communityArea.getChildren().size());
+        });
+    }
+
+    public void updatePot(int pot) {
+        this.displayedPot = pot;
+        if (potText != null) {
+            Platform.runLater(() -> potText.setText("Pot: " + pot));
+        }
+    }
+
+    public void initializeWithGame(PokerGame externalGame) {
+        this.game = externalGame;
+        this.game.setUI(this);
+        this.players = externalGame.getPlayers();
+        this.playerId = 0;
+        this.opponentBoxes = new ArrayList<>();
+    }
+
+    public void initializeForNetwork() {
+        this.isNetworkMode = true;
+        this.players = new ArrayList<>(); // Empty, will be populated by network
+        this.playerId = -1;
+        this.communityCards = new ArrayList<>(); // Initialize community cards list
+        this.opponentBoxes = new ArrayList<>(); // IMPORTANT: Initialize the list!
+        this.pendingCommunityCards = new ArrayList<>(); // <-- ADD THIS 
+        this.game = null; // Game will be managed by server
+        this.playerId = -1; // Will be set when joining
+        this.pokerClient = null; // Will be set later
+    }
+    
+    public void initializeGame() {
         // Create players (for demo: 1 human, 3 AI)
         players = new ArrayList<>();
         players.add(new Player(0, "You", 1000));
@@ -122,13 +222,30 @@ public class PokerGUI extends Application {
         
         playerId = 0;  // Human is player 0
         opponentBoxes = new ArrayList<>();
-        currentPlayerIndex = -1;
+        this.communityCards = new ArrayList<>();
+        this.pendingCommunityCards = new ArrayList<>(); 
     }
     
-    private void buildUI() {
+    public void buildUI() {
         root = new VBox(10);
         root.setPadding(new Insets(20));
         root.setStyle("-fx-background-color: #1a472a;");
+
+        // Create playerChipsText EARLY (KEEP THIS)
+        playerChipsText = new Text("Chips: 0");
+        playerChipsText.setFill(Color.WHITE);
+        playerChipsText.setFont(Font.font(16));
+
+        // Apply pending chips if any
+        if (pendingPlayerChips >= 0) {
+            playerChipsText.setText("Chips: " + pendingPlayerChips);
+            pendingPlayerChips = -1;
+        }
+
+        // Ensure opponentBoxes exists
+        if (opponentBoxes == null) {
+            opponentBoxes = new ArrayList<>();
+        }
         
         // Game status bar
         HBox statusBar = new HBox(20);
@@ -167,12 +284,33 @@ public class PokerGUI extends Application {
         communityArea = new HBox(10);
         communityArea.setAlignment(Pos.CENTER);
         communityArea.setPrefWidth(400);
+
+        if (pendingCommunityCards != null && !pendingCommunityCards.isEmpty()) {
+            System.out.println("Applying pending community cards: " + pendingCommunityCards);
+            for (Card card : pendingCommunityCards) {
+                communityArea.getChildren().add(createCardNode(card));
+            }
+            pendingCommunityCards = null;
+        }
         
         // Opponents (top, left, right positions - simplified for now)
-        for (int i = 1; i <= 3; i++) {
-            VBox opponentBox = createOpponentBox(players.get(i), i);
-            opponentBoxes.add(opponentBox);
-            tableArea.getChildren().add(opponentBox);
+        if (players != null) {
+            for (int i = 1; i <= 3 && i < players.size(); i++) {
+                VBox opponentBox = createOpponentBox(players.get(i), i);
+                opponentBoxes.add(opponentBox);
+                tableArea.getChildren().add(opponentBox);
+            }
+        } else {
+            // Network mode: create empty opponent boxes that will be populated dynamically
+            for (int i = 0; i < 3; i++) {
+                VBox opponentBox = new VBox();
+                opponentBox.setStyle("-fx-background-color: #1b4332; -fx-border-color: #d4a373; -fx-border-width: 2; -fx-padding: 10;");
+                opponentBox.setPrefWidth(120);
+                opponentBox.setPrefHeight(100);
+                opponentBox.setAlignment(Pos.CENTER);
+                opponentBoxes.add(opponentBox);
+                tableArea.getChildren().add(opponentBox);
+            }
         }
         tableArea.getChildren().add(communityArea);
         
@@ -191,7 +329,6 @@ public class PokerGUI extends Application {
         // Player info
         HBox playerInfo = new HBox(20);
         playerInfo.setAlignment(Pos.CENTER);
-        playerChipsText = new Text("Chips: " + players.get(playerId).getChips());
         playerChipsText.setFill(Color.WHITE);
         playerChipsText.setFont(Font.font(16));
         currentBetLabel = new Label("Current bet: 0");
@@ -279,22 +416,25 @@ public class PokerGUI extends Application {
         // Initially disable buttons until player's turn
         disableButtons(true);
     }
+
+    public VBox getRoot() {
+        return root;
+    }
     
     private VBox createOpponentBox(Player opponent, int index) {
         VBox box = new VBox(5);
         box.setAlignment(Pos.CENTER);
         box.setPadding(new Insets(10));
         box.setStyle("-fx-background-color: #1b4332; -fx-border-radius: 10; -fx-background-radius: 10;");
-        box.setUserData(index);  // Store index for highlighting
-        
+        box.setUserData(opponent.getId()); // Set the player ID here
+
         Text nameText = new Text(opponent.getName());
         nameText.setFill(Color.WHITE);
-        
+
         Text chipsText = new Text(opponent.getChips() + " chips");
         chipsText.setFill(Color.YELLOW);
-        
+
         HBox cards = new HBox(5);
-        // Show card backs for opponents
         for (int i = 0; i < 2; i++) {
             Rectangle cardBack = new Rectangle(50, 70);
             cardBack.setFill(Color.NAVY);
@@ -303,59 +443,83 @@ public class PokerGUI extends Application {
             cardBack.setArcHeight(10);
             cards.getChildren().add(cardBack);
         }
-        
+
         box.getChildren().addAll(nameText, chipsText, cards);
         return box;
     }
     
     private void updateUI() {
         Platform.runLater(() -> {
-            // Update player chips
-            playerChipsText.setText("Chips: " + players.get(playerId).getChips());
-            
+            // Update player chips - only in local mode or if players list has data
+            if (!isNetworkMode && players != null && playerId >= 0 && playerId < players.size()) {
+                playerChipsText.setText("Chips: " + players.get(playerId).getChips());
+            }
+
             // Update pot
             potText.setText("Pot: " + displayedPot);
-            
-            // Update player's hand
-            playerHand.getChildren().clear();
-            for (Card card : players.get(playerId).getHoleCards()) {
-                playerHand.getChildren().add(createCardNode(card));
+
+            // Update player's hand - only in local mode or if we have hole cards from
+            // network
+            if (!isNetworkMode && players != null && playerId >= 0 && playerId < players.size()) {
+                playerHand.getChildren().clear();
+                for (Card card : players.get(playerId).getHoleCards()) {
+                    playerHand.getChildren().add(createCardNode(card));
+                }
             }
-            
-            // Update community cards
-            communityArea.getChildren().clear();
-            for (Card card : game.getCommunityCards()) {
-                communityArea.getChildren().add(createCardNode(card));
+
+            // Update community cards - use stored communityCards for network mode
+            if (isNetworkMode) {
+                communityArea.getChildren().clear();
+                if (communityCards != null) {
+                    for (Card card : communityCards) {
+                        communityArea.getChildren().add(createCardNode(card));
+                    }
+                }
+            } else if (game != null) {
+                communityArea.getChildren().clear();
+                for (Card card : game.getCommunityCards()) {
+                    communityArea.getChildren().add(createCardNode(card));
+                }
             }
-            
-            // Update opponent displays
-            for (int i = 1; i <= 3; i++) {
-                VBox opponentBox = (VBox) tableArea.getChildren().get(i - 1);
-                Text chipsText = (Text) opponentBox.getChildren().get(1);
-                chipsText.setText(players.get(i).getChips() + " chips");
+
+            // Update opponent displays - only in local mode
+            if (!isNetworkMode && players != null && opponentBoxes != null) {
+                for (int i = 0; i < opponentBoxes.size(); i++) {
+                    int playerIndex = i + 1;
+                    if (playerIndex < players.size()) {
+                        VBox opponentBox = opponentBoxes.get(i);
+                        if (opponentBox != null && opponentBox.getChildren().size() > 1) {
+                            Text chipsText = (Text) opponentBox.getChildren().get(1);
+                            chipsText.setText(players.get(playerIndex).getChips() + " chips");
+                        }
+                    }
+                }
             }
         });
     }
     
     private StackPane createCardNode(Card card) {
+        System.out.println("Creating card node for: " + card);
         StackPane cardNode = new StackPane();
         cardNode.setPrefSize(60, 85);
-        cardNode.setStyle("-fx-background-color: white; -fx-border-color: black; -fx-border-radius: 5; -fx-background-radius: 5;");
-        
+        cardNode.setStyle(
+                "-fx-background-color: white; -fx-border-color: black; -fx-border-radius: 5; -fx-background-radius: 5;");
+
         String rankStr = card.getRank().toString();
         String suitStr = card.getSuit().toString().substring(0, 1);
-        Color suitColor = (card.getSuit() == Card.Suit.HEARTS || card.getSuit() == Card.Suit.DIAMONDS) 
-                          ? Color.RED : Color.BLACK;
-        
+        Color suitColor = (card.getSuit() == Card.Suit.HEARTS || card.getSuit() == Card.Suit.DIAMONDS)
+                ? Color.RED
+                : Color.BLACK;
+
         Text rankText = new Text(rankStr + suitStr);
         rankText.setFont(Font.font(20));
         rankText.setFill(suitColor);
-        
+
         cardNode.getChildren().add(rankText);
         return cardNode;
     }
     
-    private void disableButtons(boolean disabled) {
+    protected void disableButtons(boolean disabled) {
         Platform.runLater(() -> {
             checkCallButton.setDisable(disabled);
             foldButton.setDisable(disabled);
@@ -364,27 +528,45 @@ public class PokerGUI extends Application {
         });
     }
     
-    private void onCheckCall() {
-        // Send CALL action
-        game.receivePlayerAction(playerId, new Action("CALL", 0));
+    protected void onCheckCall() {
+        if (isNetworkMode) {
+            // Send to server via PokerClient (need reference)
+            if (pokerClient != null) {
+                pokerClient.sendCommand("ACTION CALL");
+            }
+        } else {
+            // Local mode - send to local game
+            game.receivePlayerAction(playerId, new Action("CALL", 0));
+        }
         clearHumanHighlight();
         disableButtons(true);
     }
-    
-    private void onFold() {
-        // Send FOLD action
-        game.receivePlayerAction(playerId, new Action("FOLD", 0));
+
+    protected void onFold() {
+        if (isNetworkMode) {
+            if (pokerClient != null) {
+                pokerClient.sendCommand("ACTION FOLD");
+            }
+        } else {
+            game.receivePlayerAction(playerId, new Action("FOLD", 0));
+        }
         clearHumanHighlight();
         disableButtons(true);
     }
-    
-    private void onRaise() {
+
+    protected void onRaise() {
         int amount = (int) raiseSlider.getValue();
-        // Send RAISE action
-        game.receivePlayerAction(playerId, new Action("RAISE", amount));
+        if (isNetworkMode) {
+            if (pokerClient != null) {
+                pokerClient.sendCommand("ACTION RAISE " + amount);
+            }
+        } else {
+            game.receivePlayerAction(playerId, new Action("RAISE", amount));
+        }
         clearHumanHighlight();
         disableButtons(true);
     }
+    
     
     private void startNewHand() {
         updateUI();
@@ -416,19 +598,22 @@ public class PokerGUI extends Application {
             currentBetLabel.setText("Current bet: " + currentBet);
             disableButtons(false);
             currentTurnText.setText("Turn: Your move");
-            
-            // Highlight player 0 (human) by clearing highlights to show human is active
+
             clearPlayerHighlight();
             highlightHumanPlayer();
-            
-            // Update check/call button text
-            int toCall = currentBet - players.get(playerId).getCurrentBet();
+
+            // In network mode, currentBet IS the amount to call
+            int toCall = currentBet;
+            if (!isNetworkMode && players != null && playerId >= 0 && playerId < players.size()) {
+                toCall = currentBet - players.get(playerId).getCurrentBet();
+            }
+
             if (toCall == 0) {
                 checkCallButton.setText("Check");
             } else {
                 checkCallButton.setText("Call (" + toCall + ")");
             }
-            
+
             gameStatusText.setText("Your turn!");
         });
     }
@@ -443,6 +628,8 @@ public class PokerGUI extends Application {
     
     public void highlightCurrentPlayer(int playerIndex) {
         Platform.runLater(() -> {
+            if (opponentBoxes == null)
+                return;
             // Clear all highlights
             for (VBox box : opponentBoxes) {
                 box.setStyle("-fx-background-color: #1b4332; -fx-border-radius: 10; -fx-background-radius: 10;");
@@ -455,8 +642,6 @@ public class PokerGUI extends Application {
                     "-fx-border-color: #f4a261; -fx-border-width: 4; -fx-effect: dropshadow(gaussian, #f4a261, 15, 0.8, 0, 0);"
                 );
             }
-            
-            currentPlayerIndex = playerIndex;
         });
     }
     
@@ -465,7 +650,6 @@ public class PokerGUI extends Application {
             for (VBox box : opponentBoxes) {
                 box.setStyle("-fx-background-color: #1b4332; -fx-border-radius: 10; -fx-background-radius: 10;");
             }
-            currentPlayerIndex = -1;
         });
     }
 
@@ -481,56 +665,22 @@ public class PokerGUI extends Application {
         Platform.runLater(() -> {
             streetBannerText.setText(street.toUpperCase());
             streetBannerText.setOpacity(1.0);
+            updateUI();
         });
     }
 
-    public void updatePot(int pot) {
-        Platform.runLater(() -> {
-            displayedPot = pot;
-            potText.setText("Pot: " + pot);
-        });
-    }
-
-    public void updateCommunityCards() {
-        Platform.runLater(() -> {
-            List<Card> cards = game.getCommunityCards();
-            int currentCardCount = communityArea.getChildren().size();
-            
-            // Only animate new cards that haven't been added yet
-            for (int i = currentCardCount; i < cards.size(); i++) {
-                Card card = cards.get(i);
-                javafx.scene.Node cardNode = createCardNode(card);
-                cardNode.setOpacity(0); // Start invisible
-                communityArea.getChildren().add(cardNode);
-                
-                // Stagger animation: each card starts after the previous one
-                int delay = i * 300; // 300ms per card
-                Timeline timeline = new Timeline(
-                    new KeyFrame(
-                        Duration.millis(delay),
-                        event -> {
-                            FadeTransition fade = new FadeTransition(
-                                Duration.millis(500),
-                                cardNode
-                            );
-                            fade.setFromValue(0);
-                            fade.setToValue(1);
-                            fade.play();
-                        }
-                    )
-                );
-                timeline.play();
-            }
-        });
-    }
 
     public void appendActionLog(String message) {
         appendActionLog(message, LogType.INFO);
     }
 
     public void appendActionLog(String message, LogType type) {
-        Platform.runLater(() -> actionLogView.getItems().add(new LogEntry(message, type)));
-    }
+    Platform.runLater(() -> {
+        if (actionLogView != null) {
+            actionLogView.getItems().add(new LogEntry(message, type));
+        }
+    });
+}
 
     // Called by PokerGame after showdown to display results
     public void showShowdown(Map<Player, HandRank> playerRanks, List<Player> winners) {
@@ -562,6 +712,240 @@ public class PokerGUI extends Application {
             startNewHand();
         });
     }
+
+    // ===== Network Listener Implementation =====
+    @Override
+    public void onJoined(int playerId, String playerName) {
+        // Player joined game
+        this.playerId = playerId;
+        Platform.runLater(() -> gameStatusText.setText("You joined as " + playerName));
+    }
+
+    @Override
+    public void onPlayerJoined(int playerId, String playerName) {
+        // Another player joined
+        Platform.runLater(() -> appendActionLog(playerName + " joined the table", LogType.INFO));
+    }
+
+    @Override
+    public void onPlayerLeft(int playerId) {
+        // A player left
+        Platform.runLater(() -> appendActionLog("Player left the table", LogType.INFO));
+    }
+
+    @Override
+    public void onStreet(String street) {
+        // Street changed (pre-flop, flop, turn, river)
+        displayStreet(street);
+    }
+
+    @Override
+    public void onPot(int pot) {
+        this.displayedPot = pot;
+        Platform.runLater(() -> potText.setText("Pot: " + pot));
+    }
+
+    @Override
+    public void onBoard(List<String> cards) {
+        // Convert string cards to Card objects for network mode
+        List<Card> cardObjects = new ArrayList<>();
+        for (String cardStr : cards) {
+            String[] parts = cardStr.split(":");
+            if (parts.length == 2) {
+                try {
+                    Card.Rank rank = Card.Rank.valueOf(parts[0]);
+                    Card.Suit suit = Card.Suit.valueOf(parts[1]);
+                    cardObjects.add(new Card(rank, suit));
+                } catch (IllegalArgumentException e) {
+                    // Skip invalid card
+                }
+            }
+        }
+        updateCommunityCards(cardObjects);
+    }
+
+    @Override
+    public void onChips(int chips) {
+        System.out.println("PokerGUI.onChips called with: " + chips);
+        // If UI not ready, store for later
+        if (playerChipsText == null) {
+            pendingPlayerChips = chips;
+            System.out.println("Stored pending chips: " + chips);
+            return;
+        }
+        Platform.runLater(() -> {
+            playerChipsText.setText("Chips: " + chips);
+            System.out.println("Updated chips display to: " + chips);
+        });
+    }
+
+    @Override
+    public void onChipsUpdate(int playerId, int chips) {
+        System.out.println("PokerGUI.onChipsUpdate called for player " + playerId + " -> " + chips);
+        System.out.println("Current this.playerId = " + this.playerId);
+
+        // Always update the display for the current player if playerId matches OR if
+        // this is the first chip update
+        if (this.playerId == -1 && playerId > 0) {
+            System.out.println("Setting playerId from chip update: " + playerId);
+            this.playerId = playerId;
+            onChips(chips);
+        } else if (playerId == this.playerId) {
+            onChips(chips);
+        } else {
+            updateOpponentChips(playerId, chips);
+        }
+    }
+    @Override
+    public void onTurn(int currentBet, int pot, List<String> communityCards) {
+        this.displayedPot = pot;
+        // on your turn, you should already have the community cards from onBoard, so we can ignore the communityCards parameter here
+        enablePlayerTurn(currentBet);
+    }
+
+    @Override
+    public void onInfo(String message) {
+        // Info message
+        Platform.runLater(() -> appendActionLog(message, LogType.INFO));
+    }
+
+    @Override
+    public void onChat(int playerId, String message) {
+        // Chat message
+        Platform.runLater(() -> appendActionLog("Player " + playerId + ": " + message, LogType.INFO));
+    }
+
+    @Override
+    public void onError(String message) {
+        // Error message
+        Platform.runLater(() -> appendActionLog("ERROR: " + message, LogType.INFO));
+    }
+
+    public void setPlayerName(String name) {
+        // Optional: Update a label showing your name
+        System.out.println("Player name set to: " + name);
+        Platform.runLater(() -> {
+            if (gameStatusText != null) {
+                gameStatusText.setText("Playing as: " + name);
+            }
+        });
+    }
+    
+    public void addOpponent(int opponentId, String opponentName) {
+        System.out.println("[addOpponent] Adding opponent: " + opponentName + " (ID: " + opponentId + ")");
+
+        if (tableArea == null) {
+            System.out.println("[addOpponent] Table area is null, can't add opponent");
+            return;
+        }
+
+        // Create a temporary Player object for the opponent
+        Player tempPlayer = new Player(opponentId, opponentName, 1000);
+
+        // Use the existing createOpponentBox method
+        VBox opponentBox = createOpponentBox(tempPlayer, opponentId);
+
+        // IMPORTANT: Set the user data to the player ID for later lookup
+        opponentBox.setUserData(opponentId);
+        System.out.println("[addOpponent] Set userData for opponentBox to: " + opponentId);
+
+        opponentBoxes.add(opponentBox);
+        System.out.println("[addOpponent] opponentBoxes size is now: " + opponentBoxes.size());
+
+        // Add to table area before community cards
+        if (communityArea != null) {
+            int communityIndex = tableArea.getChildren().indexOf(communityArea);
+            tableArea.getChildren().add(communityIndex, opponentBox);
+            System.out.println("[addOpponent] Added opponentBox at index " + communityIndex + " before communityArea");
+        } else {
+            tableArea.getChildren().add(opponentBox);
+            System.out.println("[addOpponent] Added opponentBox at end of tableArea");
+        }
+
+        System.out.println("[addOpponent] Opponent added to table with ID: " + opponentId);
+    }
+    
+    public void updateOpponentChips(int playerId, int chips) {
+        Platform.runLater(() -> {
+            boolean found = false;
+            System.out.println("updateOpponentChips called for playerId=" + playerId + ", chips=" + chips);
+            if (opponentBoxes == null || opponentBoxes.isEmpty()) {
+                System.out.println("[updateOpponentChips] opponentBoxes is null or empty!");
+            }
+            for (VBox box : opponentBoxes) {
+                Integer boxPlayerId = (Integer) box.getUserData();
+                System.out.println("  Checking box with playerId=" + boxPlayerId);
+                if (boxPlayerId != null && boxPlayerId == playerId) {
+                    // Update chips text (it's the second child)
+                    if (box.getChildren().size() > 1 && box.getChildren().get(1) instanceof Text) {
+                        Text chipsText = (Text) box.getChildren().get(1);
+                        chipsText.setText(chips + " chips");
+                        System.out.println("  Updated opponent chips for playerId=" + playerId + " to " + chips);
+                    } else {
+                        System.out.println("  Could not update chips: box children missing or not Text");
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                System.out.println("  [updateOpponentChips] No opponent box found for playerId=" + playerId);
+            }
+        });
+    }
+
+    public void onCommunityCards(List<Card> cards) {
+        System.out.println("PokerGUI.onCommunityCards called with: " + (cards != null ? cards.size() : 0) + " cards");
+        updateCommunityCards(cards);
+    }
+
+    @Override
+    public void onHandEnded() {
+        System.out.println("PokerGUI: Hand ended");
+        Platform.runLater(() -> {
+            appendActionLog("--- Hand ended ---", LogType.INFO);
+
+            // Clear community cards
+            if (communityArea != null) {
+                communityArea.getChildren().clear();
+                communityCards.clear();
+            }
+
+            // Clear player's hand (will be redealt next hand)
+            if (playerHand != null) {
+                playerHand.getChildren().clear();
+            }
+
+            // Reset button states
+            disableButtons(true);
+            currentBetLabel.setText("Current bet: 0");
+            currentTurnText.setText("Turn: Waiting for next hand");
+        });
+    }
+
+    public void updateMyChips(int chips) {
+        System.out.println(">>> updateMyChips ENTERED with chips: " + chips);
+        System.out.println(">>> playerChipsText = " + playerChipsText);
+
+        if (playerChipsText == null) {
+            System.out.println(">>> ERROR: playerChipsText is NULL! Cannot update chips.");
+            return;
+        }
+
+        Platform.runLater(() -> {
+            System.out.println(">>> Platform.runLater: Setting chips text to: " + chips);
+            playerChipsText.setText("Chips: " + chips);
+        });
+    }
+
+    public void setPendingPlayerChips(int chips) {
+        this.pendingPlayerChips = chips;
+        if (playerChipsText != null) {
+            Platform.runLater(() -> playerChipsText.setText("Chips: " + chips));
+        }
+    }
+    
+
     
     public static void main(String[] args) {
         launch(args);

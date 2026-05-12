@@ -1,13 +1,13 @@
 package com.kevin.poker;
 
 public class Card {
-	private final Rank rank;
-	private final Suit suit;
+	public final Rank rank;
+	public final Suit suit;
 	public enum Rank{
 		ACE, TWO, THREE, FOUR, FIVE, SIX, SEVEN, EIGHT, NINE,
 		TEN, JACK, QUEEN, KING
 	}
-	enum Suit{
+	public enum Suit{
 		SPADES, HEARTS, CLUBS, DIAMONDS
 	}
 	public Card(Rank rank, Suit suit) {

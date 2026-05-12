@@ -23,7 +23,7 @@ public class PokerNetworkLauncher {
                 int port = args.length > 2 ? Integer.parseInt(args[2]) : 5000;
                 String name = args.length > 3 ? args[3] : "Player";
                 try (PokerClient client = new PokerClient(host, port, name)) {
-                    client.runConsole();
+                    // client.runConsole();
                 }
                 break;
             }

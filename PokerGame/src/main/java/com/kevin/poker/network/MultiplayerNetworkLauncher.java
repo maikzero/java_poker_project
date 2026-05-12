@@ -38,14 +38,15 @@ public class MultiplayerNetworkLauncher {
         String bbInput = console.readLine().trim();
         int bigBlind = bbInput.isEmpty() ? 20 : Integer.parseInt(bbInput);
 
-        System.out.print("Enter number of players to wait for (default 3): ");
+        System.out.print("Enter total players at the table including host (default 3): ");
         String npInput = console.readLine().trim();
         int numPlayers = npInput.isEmpty() ? 3 : Integer.parseInt(npInput);
 
         MultiplayerGameController controller = new MultiplayerGameController(port, smallBlind, bigBlind);
+        controller.addHostPlayer("Host");
         controller.startServer();
 
-        System.out.println("\nWaiting for " + numPlayers + " players to join...");
+        System.out.println("\nWaiting for " + numPlayers + " total players to join...");
         try {
             controller.waitForPlayers(numPlayers, 60000);
         } catch (InterruptedException e) {
@@ -55,7 +56,7 @@ public class MultiplayerNetworkLauncher {
         }
 
         System.out.println("Starting game...");
-        controller.startGame();
+        controller.startGameWithGUI();
 
         System.out.println("\nServer running. Press Ctrl+C to stop.");
         Thread.currentThread().join();
@@ -82,7 +83,7 @@ public class MultiplayerNetworkLauncher {
         System.out.println("\nConnecting to " + host + ":" + port + " as " + name + "...");
 
         try (PokerClient client = new PokerClient(host, port, name)) {
-            client.runConsole();
+            // client.runConsole();
         } catch (Exception e) {
             System.out.println("Connection failed: " + e.getMessage());
             e.printStackTrace();

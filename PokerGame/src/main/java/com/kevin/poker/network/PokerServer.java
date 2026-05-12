@@ -173,7 +173,11 @@ public class PokerServer implements PokerNetworkBridge, Closeable {
 
     @Override
     public void onCommunityCardsUpdated(List<Card> communityCards) {
-        broadcast("BOARD " + formatCards(communityCards));
+        String payload = communityCards.stream()
+            .map(card -> card.getRank() + ":" + card.getSuit())
+            .collect(Collectors.joining(","));
+        broadcast("COMMUNITY_CARDS " + payload);
+        broadcast("BOARD " + payload);
     }
 
     @Override
@@ -189,6 +193,144 @@ public class PokerServer implements PokerNetworkBridge, Closeable {
     @Override
     public void onPlayerLeft(int playerId) {
         broadcast("LEFT " + playerId);
+    }
+
+    @Override
+    public void onHoleCardsDealt(int playerId, List<Card> holeCards) {
+        System.out.println("Sending HOLE_CARDS to player " + playerId + ": " + holeCards);
+        StringBuilder sb = new StringBuilder();
+        for (Card card : holeCards) {
+            if (sb.length() > 0)
+                sb.append(",");
+            sb.append(card.getRank()).append(":").append(card.getSuit());
+        }
+        sendToPlayer(playerId, "HOLE_CARDS " + sb.toString());
+    }
+
+    // Add to PokerServer class - Send hole cards to a specific player
+    private void sendHoleCardsToPlayer(int playerId, List<Card> holeCards) {
+        StringBuilder sb = new StringBuilder();
+        for (Card card : holeCards) {
+            if (sb.length() > 0)
+                sb.append(",");
+            sb.append(card.getRank()).append(":").append(card.getSuit());
+        }
+        sendToPlayer(playerId, "HOLE_CARDS " + sb.toString());
+    }
+
+    // Add to PokerServer class - Tell a player it's their turn
+    private void sendYourTurn(int playerId, int currentBet, int pot, List<Card> communityCards) {
+        String communityStr = formatCards(communityCards);
+        sendToPlayer(playerId, "YOUR_TURN " + currentBet);
+        sendToPlayer(playerId, "CURRENT_BET " + currentBet);
+        sendToPlayer(playerId, "POT " + pot);
+        sendToPlayer(playerId, "BOARD " + communityStr);
+    }
+
+    // Add to PokerServer class - Send game start info to all players
+    // private void broadcastGameStart() {
+    //     for (Map.Entry<Integer, ClientSession> entry : sessions.entrySet()) {
+    //         int playerId = entry.getKey();
+    //         Player player = game.getPlayers().stream()
+    //                 .filter(p -> p.getId() == playerId)
+    //                 .findFirst()
+    //                 .orElse(null);
+    //         if (player != null) {
+    //             sendToPlayer(playerId, "PLAYER_ID " + playerId);
+    //             sendToPlayer(playerId, "CHIPS " + player.getChips());
+    //             sendHoleCardsToPlayer(playerId, player.getHoleCards());
+    //         }
+    //     }
+    //     broadcastCommunityCards();
+    // }
+
+    /// In PokerServer.java - Add this method
+    private void syncFullGameStateToPlayer(int playerId) {
+        Player player = null;
+        for (Player p : game.getPlayers()) {
+            if (p.getId() == playerId) {
+                player = p;
+                break;
+            }
+        }
+
+        if (player == null) {
+            System.err.println("Could not find player " + playerId);
+            return;
+        }
+
+        System.out.println("Syncing game state to player " + playerId);
+        System.out.println("  Player chips: " + player.getChips()); // Debug
+
+        // Send PLAYER_ID with name and chips
+        sendToPlayer(playerId, "PLAYER_ID " + playerId + " " + player.getName() + " " + player.getChips());
+
+        // Send CHIPS separately as well
+        sendToPlayer(playerId, "CHIPS " + player.getChips());
+
+        // Send hole cards
+        StringBuilder holeCards = new StringBuilder();
+        for (Card card : player.getHoleCards()) {
+            if (holeCards.length() > 0)
+                holeCards.append(",");
+            holeCards.append(card.getRank()).append(":").append(card.getSuit());
+        }
+        sendToPlayer(playerId, "HOLE_CARDS " + holeCards.toString());
+
+        // Send rest of state...
+        sendToPlayer(playerId, "STREET " + game.getStreet());
+        sendToPlayer(playerId, "POT " + game.getPot());
+        sendToPlayer(playerId, "CURRENT_BET " + game.getCurrentBet());
+
+        // Send community cards
+        StringBuilder community = new StringBuilder();
+        for (Card card : game.getCommunityCards()) {
+            if (community.length() > 0)
+                community.append(",");
+            community.append(card.getRank()).append(":").append(card.getSuit());
+        }
+        sendToPlayer(playerId, "COMMUNITY_CARDS " + community.toString());
+
+        for (Player existingPlayer : game.getPlayers()) {
+            if (existingPlayer.getId() != playerId) { // Skip the player themselves
+                sendToPlayer(playerId, "JOINED_PLAYER " + existingPlayer.getId() + " " + existingPlayer.getName());
+                System.out.println("  Sending existing player: " + existingPlayer.getName() + " (ID: "
+                        + existingPlayer.getId() + ")");
+
+                // Also send their chips
+                sendToPlayer(playerId, "CHIPS_UPDATE " + existingPlayer.getId() + " " + existingPlayer.getChips());
+            }
+        }
+    }
+    
+    // Add to PokerServer class - Broadcast updated community cards to all players
+    public void notifyGameStart() {
+        broadcast("GAME_START");
+        System.out.println("Broadcasted GAME_START to all clients");
+    }
+
+    public void broadcastHoleCards() {
+        for (Player player : game.getPlayers()) {
+            StringBuilder sb = new StringBuilder();
+            for (Card card : player.getHoleCards()) {
+                if (sb.length() > 0)
+                    sb.append(",");
+                sb.append(card.getRank()).append(":").append(card.getSuit());
+            }
+            sendToPlayer(player.getId(), "HOLE_CARDS " + sb.toString());
+        }
+    }
+    
+    @Override
+    public void onChipsUpdated(int playerId, int chips) {
+        String message = "CHIPS_UPDATE " + playerId + " " + chips;
+        System.out.println("Broadcasting: " + message);
+        broadcast(message);
+    }
+    
+    @Override
+    public void onHandEnded() {
+        broadcast("HAND_ENDED");
     }
 
     private final class ClientSession implements Runnable, Closeable {
@@ -242,6 +384,9 @@ public class PokerServer implements PokerNetworkBridge, Closeable {
                 }
                 playerId = registerPlayer(name, this);
                 writer.println("JOINED " + playerId + " " + name);
+
+                // Send full game state to the new player
+                PokerServer.this.syncFullGameStateToPlayer(playerId);
                 return;
             }
 

@@ -19,4 +19,16 @@ public interface PokerNetworkBridge {
     void onPlayerJoined(Player player);
 
     void onPlayerLeft(int playerId);
+    
+    default void onHoleCardsDealt(int playerId, List<Card> holeCards) {
+        // Override in PokerServer to send HOLE_CARDS message
+    }
+    
+    default void onChipsUpdated(int playerId, int chips) {
+    }
+    
+    default void onHandEnded() {
+    }
+    
+    
 }

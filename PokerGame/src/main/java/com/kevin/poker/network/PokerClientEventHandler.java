@@ -1,5 +1,6 @@
 package com.kevin.poker.network;
 
+import com.kevin.poker.Card;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -30,6 +31,33 @@ public class PokerClientEventHandler {
         void onChat(int playerId, String message);
 
         void onError(String message);
+        
+        // Additional methods for GUI support
+        default void onGameInfo(int playerId, String playerName, int chips) {}
+        
+        default void onHoleCards(List<Card> cards) {}
+        
+        default void onTurnToAct(int playerId, int currentBet) {}
+        
+        default void onCommunityCards(List<Card> cards) {}
+        
+        default void onBet(int playerId, int amount) {}
+        
+        default void onFold(int playerId) {}
+        
+        default void onGameStart() {}
+        
+        default void onCurrentBet(int currentBet) {
+        }
+
+        default void onChips(int chips) {
+        }
+        
+        default void onChipsUpdate(int playerId, int chips) {
+        }
+
+        void onHandEnded();
+        
     }
 
     public PokerClientEventHandler(BufferedReader reader, Listener listener) {
@@ -101,6 +129,36 @@ public class PokerClientEventHandler {
             case "ERROR":
                 listener.onError(payload);
                 break;
+            case "PLAYER_ID":
+                handlePlayerId(payload);
+                break;
+
+            case "CHIPS":
+                handleChips(payload);
+                break;
+
+            case "HOLE_CARDS":
+                handleHoleCards(payload);
+                break;
+
+            case "CURRENT_BET":
+                handleCurrentBet(payload);
+                break;
+
+            case "COMMUNITY_CARDS":
+                System.out.println("Received COMMUNITY_CARDS message");
+                handleCommunityCards(payload);
+                break;
+            case "GAME_START":
+                System.out.println("Received GAME_START message");
+                listener.onGameStart();
+                break;
+            case "CHIPS_UPDATE":
+                handleChipsUpdate(payload);
+                break;
+            case "HAND_ENDED":
+                listener.onHandEnded();
+                break;
             default:
                 listener.onInfo("Unknown command: " + command);
         }
@@ -140,9 +198,12 @@ public class PokerClientEventHandler {
 
     private void handleBoard(String payload) {
         List<String> cards = new ArrayList<>();
-        if (!payload.isEmpty()) {
-            for (String card : payload.split("\\s+")) {
-                cards.add(card);
+        if (payload != null && !payload.isEmpty()) {
+            for (String token : payload.split("[\\s,]+")) {
+                String card = token.trim();
+                if (!card.isEmpty()) {
+                    cards.add(card);
+                }
             }
         }
         listener.onBoard(cards);
@@ -177,4 +238,92 @@ public class PokerClientEventHandler {
             }
         }
     }
+    
+    private void handlePlayerId(String payload) {
+        String[] parts = payload.split("\\s+");
+        try {
+            int playerId = Integer.parseInt(parts[0]);
+            String playerName = parts.length > 1 ? parts[1] : "";
+            int chips = parts.length > 2 ? Integer.parseInt(parts[2]) : 0;
+            System.out.println("handlePlayerId: id=" + playerId + ", name=" + playerName + ", chips=" + chips);
+            listener.onGameInfo(playerId, playerName, chips);
+        } catch (NumberFormatException e) {
+            listener.onError("Invalid PLAYER_ID: " + payload);
+        }
+    }
+
+    private void handleChips(String payload) {
+        try {
+            int chips = Integer.parseInt(payload);
+            System.out.println("Received CHIPS: " + chips);
+            // Just forward to listener - let the listener figure out which player
+            listener.onChipsUpdate(-1, chips); // -1 means unknown player, listener will handle
+        } catch (NumberFormatException e) {
+            listener.onError("Invalid CHIPS: " + payload);
+        }
+    }
+
+    private void handleHoleCards(String payload) {
+        List<Card> cards = parseCardList(payload);
+        listener.onHoleCards(cards);
+    }
+
+    private void handleCurrentBet(String payload) {
+        try {
+            int currentBet = Integer.parseInt(payload);
+            listener.onInfo("Current bet: " + currentBet);
+        } catch (NumberFormatException e) {
+            listener.onError("Invalid CURRENT_BET: " + payload);
+        }
+    }
+
+    private List<Card> parseCardList(String payload) {
+        List<Card> cards = new ArrayList<>();
+        if (payload == null || payload.isEmpty()) {
+            return cards;
+        }
+
+        String[] cardTokens = payload.split("[\\s,]+");
+        for (String token : cardTokens) {
+            token = token.trim();
+            if (token.isEmpty()) {
+                continue;
+            }
+            String[] parts = token.split(":");
+            if (parts.length == 2) {
+                try {
+                    Card.Rank rank = Card.Rank.valueOf(parts[0].trim().toUpperCase());
+                    Card.Suit suit = Card.Suit.valueOf(parts[1].trim().toUpperCase());
+                    cards.add(new Card(rank, suit));
+                } catch (IllegalArgumentException e) {
+                    System.err.println("Failed to parse card: " + token);
+                }
+            }
+        }
+        return cards;
+    }
+
+    private void handleChipsUpdate(String payload) {
+        String[] parts = payload.split("\\s+");
+        if (parts.length >= 2) {
+            try {
+                int playerId = Integer.parseInt(parts[0]);
+                int chips = Integer.parseInt(parts[1]);
+                System.out.println("CHIPS_UPDATE received - Player " + playerId + ": " + chips);
+                listener.onChipsUpdate(playerId, chips);
+            } catch (NumberFormatException e) {
+                System.err.println("Failed to parse CHIPS_UPDATE: " + payload);
+            }
+        }
+    }
+
+    private void handleCommunityCards(String payload) {
+        List<Card> cards = parseCardList(payload);
+        listener.onCommunityCards(cards);
+    }
+
+    
+
+    
+    
 }

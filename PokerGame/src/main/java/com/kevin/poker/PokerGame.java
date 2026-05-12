@@ -23,6 +23,9 @@ public class PokerGame {
     private final Map<Integer, BlockingQueue<Action>> networkActionQueues = new ConcurrentHashMap<>();
     private final BlockingQueue<Action> guiActionQueue = new LinkedBlockingQueue<>();
     private boolean networkMode = false;
+    private String currentStreet = "PRE-FLOP";
+    private int currentBet = 0;
+    private int playerId = -1; // For networked clients to identify themselves
     
     public PokerGame(int smallBlind, int bigBlind) {
         this.smallBlind = smallBlind;
@@ -99,12 +102,30 @@ public class PokerGame {
     }
     
     public void displayStreet(String street) {
+        this.currentStreet = street; // ADD THIS LINE
         if (ui != null) {
             ui.displayStreet(street);
         }
         if (networkBridge != null) {
             networkBridge.onStreetChanged(street);
         }
+    }
+
+    public String getStreet() {
+        return currentStreet;
+    }
+
+    public int getCurrentBet() {
+        return currentBet;
+    }
+
+    public void setCurrentBet(int bet) {
+        this.currentBet = bet;
+    }
+    
+    public void setPlayerId(int playerId) {
+        this.playerId = playerId;
+        System.out.println("PokerGUI: Player ID set to " + playerId);
     }
     
     public void startGame() {
@@ -142,54 +163,64 @@ public class PokerGame {
         System.out.println("\n" + "=".repeat(50));
         System.out.println("NEW HAND - Dealer: " + players.get(dealerIndex).getName());
         System.out.println("=".repeat(50));
-        
+
         // Reset for new hand
         deck.reset();
         deck.shuffle();
         communityCards.clear();
         pot = 0;
         players.forEach(Player::resetForNewHand);
-        
+
         // Collect blinds
         int smallBlindIndex = (dealerIndex + 1) % players.size();
         int bigBlindIndex = (dealerIndex + 2) % players.size();
-        
+
         Player smallBlindPlayer = players.get(smallBlindIndex);
         Player bigBlindPlayer = players.get(bigBlindIndex);
-        
+
         smallBlindPlayer.placeBet(smallBlind);
         bigBlindPlayer.placeBet(bigBlind);
+        // Broadcast chip updates
+        broadcastChipUpdate(smallBlindPlayer);
+        broadcastChipUpdate(bigBlindPlayer);
         pot = smallBlind + bigBlind;
-        
+
         System.out.println(smallBlindPlayer.getName() + " posts small blind: " + smallBlind);
         System.out.println(bigBlindPlayer.getName() + " posts big blind: " + bigBlind);
-        
+
         // Deal hole cards
         for (int i = 0; i < 2; i++) {
             for (Player player : players) {
                 player.receiveCard(deck.drawCard());
             }
         }
-        
+
+        // Broadcast hole cards to all players
+        if (networkBridge != null) {
+            for (Player player : players) {
+                networkBridge.onHoleCardsDealt(player.getId(), player.getHoleCards());
+            }
+        }
+
         // Show hole cards (only for human players - here all are human for testing)
         for (Player player : players) {
             System.out.println(player.getName() + " hole cards: " + player.getHoleCards());
         }
-        
-        // Pre-flop betting
+
+        // Pre-flop betting - Pass current pot
         displayStreet("PRE-FLOP");
         int firstToAct = (bigBlindIndex + 1) % players.size();
-        BettingRound preFlop = new BettingRound(players, bigBlind);
+        BettingRound preFlop = new BettingRound(players, bigBlind, pot); // Pass current pot
         boolean moreThanOne = preFlop.runBettingRound(firstToAct, this);
-        pot += preFlop.getPot();
+        pot = preFlop.getPot(); // Get updated pot
         updatePotDisplay(pot);
-        
+
         if (!moreThanOne) {
             awardPotToRemainingPlayer();
             return;
         }
-        
-        // Flop
+
+        // Flop - FIXED: Pass current pot
         displayStreet("FLOP");
         System.out.println("\n" + "─".repeat(30));
         System.out.println("FLOP");
@@ -199,18 +230,18 @@ public class PokerGame {
         communityCards.add(deck.drawCard());
         displayCommunityCards();
         updateCommunityCardsDisplay();
-        
-        BettingRound flop = new BettingRound(players, 0);
+
+        BettingRound flop = new BettingRound(players, 0, pot); // Pass current pot
         moreThanOne = flop.runBettingRound(smallBlindIndex, this);
-        pot += flop.getPot();
+        pot = flop.getPot(); // Get updated pot
         updatePotDisplay(pot);
-        
+
         if (!moreThanOne) {
             awardPotToRemainingPlayer();
             return;
         }
-        
-        // Turn
+
+        // Turn - FIXED: Pass current pot
         displayStreet("TURN");
         System.out.println("\n" + "─".repeat(30));
         System.out.println("TURN");
@@ -218,18 +249,18 @@ public class PokerGame {
         communityCards.add(deck.drawCard());
         displayCommunityCards();
         updateCommunityCardsDisplay();
-        
-        BettingRound turn = new BettingRound(players, 0);
+
+        BettingRound turn = new BettingRound(players, 0, pot); // Pass current pot
         moreThanOne = turn.runBettingRound(smallBlindIndex, this);
-        pot += turn.getPot();
+        pot = turn.getPot(); // Get updated pot
         updatePotDisplay(pot);
-        
+
         if (!moreThanOne) {
             awardPotToRemainingPlayer();
             return;
         }
-        
-        // River
+
+        // River - FIXED: Pass current pot
         displayStreet("RIVER");
         System.out.println("\n" + "─".repeat(30));
         System.out.println("RIVER");
@@ -237,17 +268,17 @@ public class PokerGame {
         communityCards.add(deck.drawCard());
         displayCommunityCards();
         updateCommunityCardsDisplay();
-        
-        BettingRound river = new BettingRound(players, 0);
+
+        BettingRound river = new BettingRound(players, 0, pot); // Pass current pot
         moreThanOne = river.runBettingRound(smallBlindIndex, this);
-        pot += river.getPot();
+        pot = river.getPot(); // Get updated pot
         updatePotDisplay(pot);
-        
+
         if (!moreThanOne) {
             awardPotToRemainingPlayer();
             return;
         }
-        
+
         // Showdown
         showdown();
     }
@@ -259,8 +290,12 @@ public class PokerGame {
         }
         System.out.println();
     }
+    
 
     private void updateCommunityCardsDisplay() {
+        System.out.println("=== updateCommunityCardsDisplay called ===");
+        System.out.println("Current community cards: " + communityCards.size() + " cards - " + communityCards);
+
         if (ui != null) {
             ui.updateCommunityCards();
         }
@@ -310,6 +345,7 @@ public class PokerGame {
         int splitPot = pot / winners.size();
         for (Player w : winners) {
             w.addChips(splitPot);
+            broadcastChipUpdate(w); // Broadcast chip update for winner(s)
             System.out.println("\n🎉 " + w.getName() + " wins " + splitPot + " chips with " + playerRanks.get(w).getType() + " 🎉");
             logAction(w.getName() + " wins " + splitPot + " chips", PokerGUI.LogType.WIN);
         }
@@ -330,8 +366,29 @@ public class PokerGame {
     private void awardPotToRemainingPlayer() {
         Optional<Player> winner = players.stream().filter(p -> !p.isFolded()).findFirst();
         if (winner.isPresent()) {
-            winner.get().addChips(pot);
-            System.out.println("\n🏆 " + winner.get().getName() + " wins " + pot + " chips (everyone else folded) 🏆");
+            Player winningPlayer = winner.get();
+            winningPlayer.addChips(pot);
+            System.out.println("\n🏆 " + winningPlayer.getName() + " wins " + pot + " chips (everyone else folded) 🏆");
+            logAction(winningPlayer.getName() + " wins " + pot + " chips (everyone else folded)", PokerGUI.LogType.WIN);
+
+            // Broadcast chips update to all clients
+            broadcastChipUpdate(winningPlayer); // Add this
+            if (networkBridge != null) {
+                // Also broadcast that the hand ended so clients can reset
+                networkBridge.onHandEnded();
+                networkBridge.onCommunityCardsUpdated(new ArrayList<>()); // Clear board
+            }
+
+            // Show chip counts
+            System.out.println("\nCurrent chip counts:");
+            for (Player p : players) {
+                System.out.println("  " + p.getName() + ": " + p.getChips() + " chips");
+                if (networkBridge != null) {
+                    networkBridge.onChipsUpdated(p.getId(), p.getChips());
+                }
+            }
+            
+            
         }
     }
     
@@ -372,7 +429,7 @@ public class PokerGame {
         
         System.out.println("\n" + "▶".repeat(20));
         System.out.println(player.getName() + "'s TURN");
-        System.out.println("Your chips: " + player.getChips());
+        System.out.println("Your chips: " + player.getChips()); 
         System.out.println("Current bet to match: " + currentBet);
         System.out.println("You have already bet: " + player.getCurrentBet());
         
@@ -449,7 +506,32 @@ public class PokerGame {
         if (players.size() > 0) {
             dealerIndex = (dealerIndex + 1) % players.size();
         }
+
+        // broadcast hole cards to all players
+        if (networkBridge != null) {
+            for (Player player : players) {
+                networkBridge.onHoleCardsDealt(player.getId(), player.getHoleCards());
+            }
+        }
     }
+
+    public void broadcastChipUpdate(Player player) {
+        if (networkBridge != null) {
+            networkBridge.onChipsUpdated(player.getId(), player.getChips());
+            System.out.println("Broadcasting chip update - Player " + player.getId() + ": " + player.getChips());
+        }
+    }
+
+    private void broadcastAllChips() {
+        if (networkBridge != null) {
+            for (Player p : players) {
+                networkBridge.onChipsUpdated(p.getId(), p.getChips());
+            }
+        }
+    }
+
+    
+
     
     public static void main(String[] args) {
         System.out.println("=".repeat(50));

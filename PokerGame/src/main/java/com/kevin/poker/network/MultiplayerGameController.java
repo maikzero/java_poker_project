@@ -35,6 +35,13 @@ public class MultiplayerGameController {
         return server;
     }
 
+    public void addHostPlayer(String playerName) {
+        boolean hostExists = game.getPlayers().stream().anyMatch(player -> player.getId() == 0);
+        if (!hostExists) {
+            game.addPlayer(new com.kevin.poker.Player(0, playerName, 1000));
+        }
+    }
+
     public void waitForPlayers(int expectedPlayerCount, long timeoutMs) throws InterruptedException {
         long startTime = System.currentTimeMillis();
         while (game.getPlayers().size() < expectedPlayerCount) {
@@ -47,7 +54,8 @@ public class MultiplayerGameController {
         Thread.sleep(500); // Give clients time to settle
     }
 
-    public void startGame() {
+    public void startGameWithGUI() {
+        server.notifyGameStart(); // Tell all clients game is starting
         Thread gameThread = new Thread(() -> {
             try {
                 game.startGame();
